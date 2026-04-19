@@ -5,7 +5,7 @@
 <p align="center">
   <i>Context that stays where work happens.</i>
   <br/>
-  <img width="100%" alt="strand screenshot" src="docs/assets/strand-screenshot.png">
+  <img width="100%" alt="strand screenshot" src="./docs/assets/strand-screenshot.png">
 </p>
 
 ---
