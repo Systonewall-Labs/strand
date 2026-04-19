@@ -1,0 +1,17 @@
+node_modules
+.env
+
+/generated/prisma
+
+/.next
+
+.env.local
+.env
+
+pnpm-lock.yaml
+
+# SQLite database files
+*.db
+*.db-journal
+prisma/*.db
+prisma/*.db-journal

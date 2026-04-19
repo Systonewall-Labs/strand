@@ -1,0 +1,138 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String
+  password  String
+  createdAt DateTime @default(now())
+
+  members     Member[]
+  messages    Message[]
+  sessions    Session[]
+  invitations Invitation[]
+}
+
+model Workspace {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+
+  members    Member[]
+  strands    Strand[]
+  invitations Invitation[]
+}
+
+model Member {
+  id         String   @id @default(cuid())
+  userId     String
+  workspaceId String
+  role       String   // admin, member
+  createdAt  DateTime @default(now())
+
+  user       User     @relation(fields: [userId], references: [id])
+  workspace  Workspace @relation(fields: [workspaceId], references: [id])
+  strands    Strand[]  @relation("StrandParticipant")
+  tasks      Task[]
+
+  @@unique([userId, workspaceId])
+}
+
+model Strand {
+  id          String   @id @default(cuid())
+  title       String
+  resolved    Boolean  @default(false)
+  workspaceId String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace    Workspace         @relation(fields: [workspaceId], references: [id])
+  participants Member[]          @relation("StrandParticipant")
+  messages    Message[]
+  tasks       Task[]
+  decisions   Decision[]
+  doc         Doc?
+}
+
+model Message {
+  id        String   @id @default(cuid())
+  strandId  String
+  userId    String
+  content   String
+  createdAt DateTime @default(now())
+
+  strand Strand @relation(fields: [strandId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id])
+
+  // Optional context cards (stored as JSON string)
+  cards    String?
+  isDecision Boolean @default(false)
+}
+
+model Task {
+  id        String   @id @default(cuid())
+  strandId  String
+  name      String
+  assigneeId String?
+  dueDate   DateTime?
+  done      Boolean  @default(false)
+  status    String   @default("open") // open, in_progress, closed
+  origin    Boolean  @default(false) // created from conversation
+  createdAt DateTime @default(now())
+
+  strand    Strand @relation(fields: [strandId], references: [id], onDelete: Cascade)
+  assignee  Member? @relation(fields: [assigneeId], references: [id])
+}
+
+model Decision {
+  id        String   @id @default(cuid())
+  strandId  String
+  what      String
+  why       String?
+  notes     String?
+  createdAt DateTime @default(now())
+
+  strand Strand @relation(fields: [strandId], references: [id], onDelete: Cascade)
+}
+
+model Doc {
+  id        String   @id @default(cuid())
+  strandId  String   @unique
+  sections  String     // array of {label, content} as JSON string
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  strand Strand @relation(fields: [strandId], references: [id], onDelete: Cascade)
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model Invitation {
+  id         String   @id @default(cuid())
+  email      String
+  workspaceId String
+  invitedBy  String
+  accepted   Boolean  @default(false)
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+  inviter   User     @relation(fields: [invitedBy], references: [id])
+}

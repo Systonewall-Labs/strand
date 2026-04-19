@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Strand</title>
+<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+
+<!-- ══ SCREEN 0: LOGIN ══ -->
+<div class="screen" id="screen-login" role="main" aria-labelledby="login-title">
+  <div class="onboard-wrap">
+    <div class="onboard-card">
+      <div class="onboard-header">
+        <span class="onboard-logo">strand</span>
+        <div class="onboard-title" id="login-title">Sign in</div>
+        <div class="onboard-sub">Welcome back to your workspace.</div>
+      </div>
+      <div class="onboard-body">
+        <div>
+          <div class="field-label">Work email</div>
+          <input type="email" class="field-input" id="l-email" placeholder="rafael@company.com" aria-label="Work email" required autocomplete="email">
+        </div>
+        <div>
+          <div class="field-label">Password</div>
+          <input type="password" class="field-input" id="l-password" placeholder="········" aria-label="Password" required autocomplete="current-password">
+        </div>
+      </div>
+      <div class="onboard-footer">
+        <button class="btn-primary" onclick="handleLogin()" aria-label="Sign in to your workspace">Sign in →</button>
+        <button class="btn-secondary" onclick="goTo('screen-signup')" aria-label="Go to signup page">← Back to signup</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ SCREEN 1: SIGNUP ══ -->
+<div class="screen active" id="screen-signup" role="main" aria-labelledby="signup-title">
+  <div class="onboard-wrap">
+    <div class="onboard-card">
+      <div class="onboard-header">
+        <span class="onboard-logo">strand</span>
+        <div class="onboard-title" id="signup-title">Create your account</div>
+        <div class="onboard-sub">Context that stays where work happens.</div>
+      </div>
+      <div class="onboard-body">
+        <div>
+          <div class="field-label">Full name</div>
+          <input type="text" class="field-input" id="s-name" placeholder="Rafael Silva" aria-label="Full name" required autocomplete="name">
+        </div>
+        <div>
+          <div class="field-label">Work email</div>
+          <input type="email" class="field-input" id="s-email" placeholder="rafael@company.com" aria-label="Work email" required autocomplete="email">
+        </div>
+        <div>
+          <div class="field-label">Password</div>
+          <input type="password" class="field-input" id="s-password" placeholder="········" aria-label="Password" required autocomplete="new-password">
+        </div>
+      </div>
+      <div class="onboard-footer">
+        <button class="btn-primary" onclick="handleSignup()" aria-label="Create your account">Create account →</button>
+        <button class="btn-secondary" onclick="goTo('screen-login')" aria-label="Sign in to existing workspace">Sign in to existing workspace</button>
+      </div>
+      <div class="step-bar">
+        <div class="step-dot active"></div>
+        <div class="step-dot"></div>
+        <div class="step-dot"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ SCREEN 2: WORKSPACE ══ -->
+<div class="screen" id="screen-workspace">
+  <div class="onboard-wrap">
+    <div class="onboard-card">
+      <div class="onboard-header">
+        <span class="onboard-logo">strand</span>
+        <div class="onboard-title">Name your workspace</div>
+        <div class="onboard-sub">This is where your team's work will live. Usually your company or project name.</div>
+      </div>
+      <div class="onboard-body">
+        <div>
+          <div class="field-label">Workspace name</div>
+          <input type="text" class="field-input" id="w-name" placeholder="e.g. Acme Corp, Project Nova">
+        </div>
+        <div>
+          <div class="field-label">First strand — what are you working on right now?</div>
+          <input type="text" class="field-input" id="w-strand" placeholder="e.g. MVP launch, fixing the checkout bug">
+        </div>
+      </div>
+      <div class="onboard-footer">
+        <button class="btn-primary" onclick="handleWorkspaceCreation()">Continue →</button>
+        <button class="btn-secondary" onclick="skipWorkspace()">Skip for now</button>
+      </div>
+      <div class="step-bar">
+        <div class="step-dot done"></div>
+        <div class="step-dot active"></div>
+        <div class="step-dot"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ SCREEN 3: INVITE ══ -->
+<div class="screen" id="screen-invite">
+  <div class="onboard-wrap">
+    <div class="onboard-card">
+      <div class="onboard-header">
+        <span class="onboard-logo">strand</span>
+        <div class="onboard-title">Invite your team</div>
+        <div class="onboard-sub">Strand works best with the people you actually work with. You can skip this and invite later.</div>
+      </div>
+      <div class="onboard-body">
+        <div>
+          <div class="field-label">Invite by email</div>
+          <div class="invite-row">
+            <input type="email" class="field-input" id="invite-email" placeholder="colleague@company.com">
+            <button class="invite-add-btn" onclick="addInvite()">+ add</button>
+          </div>
+        </div>
+        <div class="invited-list" id="invited-list"></div>
+      </div>
+      <div class="onboard-footer">
+        <button class="btn-primary" onclick="goTo('screen-app')">Open Strand →</button>
+        <button class="btn-secondary" onclick="goTo('screen-app')">Skip for now</button>
+      </div>
+      <div class="step-bar">
+        <div class="step-dot done"></div>
+        <div class="step-dot done"></div>
+        <div class="step-dot active"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ SCREEN 4: APP ══ -->
+<div class="screen" id="screen-app" role="main">
+  <!-- TOPBAR -->
+  <div class="topbar" role="banner">
+    <span class="logo">strand</span>
+    <div class="workspace-selector">
+      <button class="workspace-btn" onclick="toggleWorkspaceDropdown()" aria-label="Switch workspace">
+        <span class="workspace-name" id="workspace-name">Loading...</span>
+        <span class="workspace-arrow">▼</span>
+      </button>
+      <div class="workspace-dropdown" id="workspace-dropdown" style="display:none;">
+        <div id="workspace-list"></div>
+        <div class="workspace-divider"></div>
+        <button class="workspace-action" onclick="openModal('workspace')">+ Create new workspace</button>
+      </div>
+    </div>
+    <div class="topbar-nav" role="navigation" aria-label="Main navigation">
+      <button class="nav-btn active" id="nav-strands" onclick="switchView('strands', this)" aria-pressed="true" aria-label="View strands">⌁ Strands</button>
+      <button class="nav-btn" id="nav-wiki" onclick="switchView('wiki', this)" aria-pressed="false" aria-label="View wiki">◈ Wiki</button>
+    </div>
+    <div class="topbar-right">
+      <button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle dark mode" id="theme-toggle">☀</button>
+      <div class="avatar-sm you" aria-label="Your avatar">R</div>
+      <button class="manage-btn" onclick="openModal('members')" aria-label="Manage team members">manage</button>
+      <button class="manage-btn" onclick="handleLogout()" aria-label="Sign out">sign out</button>
+    </div>
+  </div>
+
+  <!-- APP BODY -->
+  <div class="app-body">
+    <!-- SIDEBAR (shared) -->
+    <div class="sidebar">
+      <div class="sidebar-inner" id="sidebar">
+        <div class="section-label">Open</div>
+        <div id="empty-sidebar" style="padding:20px;text-align:center;color:var(--text-muted);font-size:11px;font-weight:300;">
+          No strands yet.<br>Create your first strand to get started.
+        </div>
+      </div>
+      <button class="new-strand-btn" onclick="openModal('strand')">
+        <span style="font-size:14px;line-height:1">+</span> new strand
+      </button>
+    </div>
+
+    <!-- STRANDS VIEW -->
+    <div id="view-strands" style="display:flex;flex:1;overflow:hidden;">
+      <div class="thread-view" id="thread-view">
+        <div class="thread-header">
+          <div class="thread-title" id="thread-title">No strand selected</div>
+          <div class="thread-chips" id="thread-chips"></div>
+          <button class="resolve-btn" id="resolve-btn" onclick="toggleResolve()" style="display:none;">resolve</button>
+        </div>
+        <div class="messages" id="messages-container">
+          <div id="empty-state" style="display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:12px;font-weight:300;padding:40px;text-align:center;flex:1;">
+            Select a strand from the sidebar to view its messages, or create a new strand to get started.
+          </div>
+        </div>
+        <div class="input-area" style="display:none;">
+          <div class="input-box">
+            <textarea class="input-field" id="msg-input" placeholder="reply in this strand..." rows="2"></textarea>
+            <div class="input-toolbar">
+              <button class="toolbar-btn task" onclick="openModal('task')"><span class="toolbar-icon">☑</span> Task</button>
+              <button class="toolbar-btn decision" onclick="openModal('decision')"><span class="toolbar-icon">⊙</span> Decision</button>
+              <button class="send-btn" onclick="sendMessage()">send ↵</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="right-panel">
+        <div class="panel-tabs">
+          <button class="p-tab active" onclick="switchTab('tasks',this)">Tasks</button>
+          <button class="p-tab" onclick="switchTab('decisions',this)">Decisions</button>
+        </div>
+        <div class="panel-body" id="panel-body">
+          <div class="tab-panel active" id="tab-tasks">
+            <div style="padding:20px 0;text-align:center;color:var(--text-muted);font-size:11px;font-weight:300;">no tasks yet</div>
+          </div>
+          <div class="tab-panel" id="tab-decisions">
+            <div style="padding:20px 0;text-align:center;color:var(--text-muted);font-size:11px;font-weight:300;">no decisions yet</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- WIKI VIEW -->
+    <div id="view-wiki" style="display:none;flex:1;overflow:hidden;" role="region" aria-label="Wiki">
+      <div class="wiki-view">
+        <div class="wiki-header">
+          <div class="wiki-title">Wiki</div>
+          <div class="wiki-search">
+            <span class="wiki-search-icon" aria-hidden="true">⌕</span>
+            <input type="text" placeholder="Search decisions across all strands..." id="wiki-search-input" aria-label="Search wiki content">
+          </div>
+          <div class="wiki-filters" role="group" aria-label="Wiki filters">
+            <div class="wiki-filter active" role="button" tabindex="0" aria-pressed="true">All</div>
+            <div class="wiki-filter" role="button" tabindex="0" aria-pressed="false">From open strands</div>
+            <div class="wiki-filter" role="button" tabindex="0" aria-pressed="false">From resolved strands</div>
+          </div>
+        </div>
+        <div class="wiki-body" id="wiki-body" role="list" aria-live="polite">
+          <div style="padding:40px;text-align:center;color:var(--text-muted);font-size:12px;font-weight:300;">nothing found</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL CONTAINER -->
+<div id="modal-container"></div>
+
+<!-- TOAST CONTAINER -->
+<div id="toast-container"></div>
+
+<script src="/js/app.js"></script>
+</body>
+</html>
