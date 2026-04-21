@@ -6,6 +6,7 @@
   <i>Context that stays where work happens.</i>
   <br/>
   <img width="100%" alt="strand screenshot" src="./docs/assets/print-strands-1.png">
+  <a href="https://strand.onrender.com">Live Demo</a>
 </p>
 
 ---
