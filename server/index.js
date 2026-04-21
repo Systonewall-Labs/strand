@@ -6,6 +6,8 @@ import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { Resend } from 'resend';
 import cors from 'cors';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import {
   lucia,
   createUser,
@@ -40,7 +42,9 @@ function secureLog(level, message, error = null) {
 
   // Don't log full error objects in production
   if (error && process.env.NODE_ENV === 'production') {
-    console.error(`[${timestamp}] [${level}] ${sanitizedMessage}`);
+    // Log only error message, not stack or details
+    const errorMsg = error.message || 'Unknown error';
+    console.error(`[${timestamp}] [${level}] ${sanitizedMessage}: ${errorMsg}`);
   } else if (error) {
     console.error(`[${timestamp}] [${level}] ${sanitizedMessage}`, error);
   } else {
@@ -48,11 +52,55 @@ function secureLog(level, message, error = null) {
   }
 }
 
+// Helper to sanitize request data for logging
+function sanitizeRequestData(data) {
+  if (!data) return data;
+  
+  const sanitized = { ...data };
+  const sensitiveFields = ['password', 'token', 'apiKey', 'secret', 'csrf_token', 'auth_session'];
+  
+  for (const field of sensitiveFields) {
+    if (sanitized[field]) {
+      sanitized[field] = '[REDACTED]';
+    }
+  }
+  
+  return sanitized;
+}
+
 // Validate CUID format (Prisma ID format)
 function isValidCuid(id) {
   // CUID format: 25 characters, starts with a letter
   const cuidRegex = /^[a-z][a-z0-9]{24}$/;
   return cuidRegex.test(id);
+}
+
+// Input validation helper
+function validateInput(data, rules) {
+  const errors = [];
+  
+  for (const [field, rule] of Object.entries(rules)) {
+    const value = data[field];
+    
+    if (rule.required && (!value || value.toString().trim() === '')) {
+      errors.push(`${field} is required`);
+      continue;
+    }
+    
+    if (value && rule.maxLen && value.toString().length > rule.maxLen) {
+      errors.push(`${field} exceeds maximum length of ${rule.maxLen}`);
+    }
+    
+    if (value && rule.minLen && value.toString().length < rule.minLen) {
+      errors.push(`${field} must be at least ${rule.minLen} characters`);
+    }
+    
+    if (value && rule.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+      errors.push(`${field} must be a valid email`);
+    }
+  }
+  
+  return errors;
 }
 
 // Check if workspace exists
@@ -71,9 +119,66 @@ export default app;
 export { prisma };
 
 // Middleware
-app.use(express.json());
+const maxPayloadSize = process.env.MAX_PAYLOAD_SIZE || '1mb';
+app.use(express.json({ limit: maxPayloadSize }));
 app.use(cookieParser());
-app.use(express.static(path.join(__dirname, '../public')));
+
+// Configure MIME types for static files
+app.use(express.static(path.join(__dirname, '../public'), {
+  setHeaders: (res, filepath) => {
+    if (filepath.endsWith('.js')) {
+      res.setHeader('Content-Type', 'application/javascript');
+    } else if (filepath.endsWith('.css')) {
+      res.setHeader('Content-Type', 'text/css');
+    }
+  }
+}));
+
+// Security headers with Helmet
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
+      imgSrc: ["'self'", "data:", "https:"],
+      connectSrc: ["'self'"],
+      fontSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      mediaSrc: ["'self'"],
+      frameSrc: ["'none'"],
+    },
+  },
+  hsts: {
+    maxAge: 31536000,
+    includeSubDomains: true,
+    preload: true
+  }
+}));
+
+// Rate limiting
+const rateLimitWindowMs = parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 900000; // 15 minutes
+const rateLimitMaxRequests = parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100;
+
+// General rate limiter
+const generalLimiter = rateLimit({
+  windowMs: rateLimitWindowMs,
+  max: rateLimitMaxRequests,
+  message: { error: 'Too many requests, please try again later' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Stricter rate limiter for authentication endpoints
+const authLimiter = rateLimit({
+  windowMs: rateLimitWindowMs,
+  max: 5, // 5 requests per window for auth endpoints
+  message: { error: 'Too many authentication attempts, please try again later' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use(generalLimiter);
 app.use(setCsrfToken);
 
 // CORS configuration
@@ -94,7 +199,7 @@ app.get('/', (req, res) => {
 });
 
 // Authentication routes
-app.post('/api/auth/signup', async (req, res) => {
+app.post('/api/auth/signup', authLimiter, async (req, res) => {
   try {
     const { name, email, password, workspaceName } = req.body;
 
@@ -188,7 +293,7 @@ app.post('/api/auth/signup', async (req, res) => {
   }
 });
 
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', authLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
 
@@ -328,7 +433,15 @@ app.post('/api/workspace', csrfProtection, async (req, res) => {
       await prisma.strand.create({
         data: {
           title: firstStrand,
-          workspaceId: workspace.id
+          workspaceId: workspace.id,
+          participants: {
+            connect: {
+              userId_workspaceId: {
+                userId: user.id,
+                workspaceId: workspace.id
+              }
+            }
+          }
         }
       });
     }
@@ -438,7 +551,15 @@ app.post('/api/strands', csrfProtection, async (req, res) => {
     const strand = await prisma.strand.create({
       data: {
         title,
-        workspaceId
+        workspaceId,
+        participants: {
+          connect: {
+            userId_workspaceId: {
+              userId: user.id,
+              workspaceId
+            }
+          }
+        }
       }
     });
 
@@ -515,6 +636,13 @@ app.get('/api/strands/:id/messages', async (req, res) => {
     }
 
     const { id } = req.params;
+
+    // Check if user has access to the strand's workspace
+    const accessCheck = await checkStrandAccess(id, user.id);
+    if (!accessCheck.hasAccess) {
+      return res.status(403).json({ error: accessCheck.error });
+    }
+
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
     const skip = (page - 1) * limit;
@@ -572,8 +700,31 @@ app.post('/api/messages', csrfProtection, async (req, res) => {
     }
 
     const strand = await prisma.strand.findUnique({
-      where: { id: strandId }
+      where: { id: strandId },
+      include: {
+        participants: true
+      }
     });
+
+    // Check if user is already a participant
+    const isParticipant = strand.participants.some(p => p.userId === user.id);
+    
+    // Add user as participant if not already
+    if (!isParticipant) {
+      await prisma.member.update({
+        where: { 
+          userId_workspaceId: {
+            userId: user.id,
+            workspaceId: strand.workspaceId
+          }
+        },
+        data: {
+          strands: {
+            connect: { id: strandId }
+          }
+        }
+      });
+    }
 
     const message = await prisma.message.create({
       data: {
@@ -618,6 +769,12 @@ app.get('/api/strands/:id/tasks', async (req, res) => {
     }
 
     const { id } = req.params;
+
+    // Check if user has access to the strand's workspace
+    const accessCheck = await checkStrandAccess(id, user.id);
+    if (!accessCheck.hasAccess) {
+      return res.status(403).json({ error: accessCheck.error });
+    }
 
     const tasks = await prisma.task.findMany({
       where: { strandId: id },
@@ -674,6 +831,33 @@ app.post('/api/tasks', csrfProtection, async (req, res) => {
 
     if (!strandId || !name) {
       return res.status(400).json({ error: 'strandId and name are required' });
+    }
+
+    // Check if user is already a participant of the strand
+    const strand = await prisma.strand.findUnique({
+      where: { id: strandId },
+      include: {
+        participants: true
+      }
+    });
+
+    const isParticipant = strand.participants.some(p => p.userId === user.id);
+    
+    // Add user as participant if not already
+    if (!isParticipant) {
+      await prisma.member.update({
+        where: { 
+          userId_workspaceId: {
+            userId: user.id,
+            workspaceId: strand.workspaceId
+          }
+        },
+        data: {
+          strands: {
+            connect: { id: strandId }
+          }
+        }
+      });
     }
 
     const task = await prisma.task.create({
@@ -819,6 +1003,12 @@ app.get('/api/strands/:id/decisions', async (req, res) => {
 
     const { id } = req.params;
 
+    // Check if user has access to the strand's workspace
+    const accessCheck = await checkStrandAccess(id, user.id);
+    if (!accessCheck.hasAccess) {
+      return res.status(403).json({ error: accessCheck.error });
+    }
+
     const decisions = await prisma.decision.findMany({
       where: { strandId: id },
       orderBy: { createdAt: 'asc' }
@@ -847,6 +1037,33 @@ app.post('/api/decisions', csrfProtection, async (req, res) => {
 
     if (!strandId || !what) {
       return res.status(400).json({ error: 'strandId and what are required' });
+    }
+
+    // Check if user is already a participant of the strand
+    const strand = await prisma.strand.findUnique({
+      where: { id: strandId },
+      include: {
+        participants: true
+      }
+    });
+
+    const isParticipant = strand.participants.some(p => p.userId === user.id);
+    
+    // Add user as participant if not already
+    if (!isParticipant) {
+      await prisma.member.update({
+        where: { 
+          userId_workspaceId: {
+            userId: user.id,
+            workspaceId: strand.workspaceId
+          }
+        },
+        data: {
+          strands: {
+            connect: { id: strandId }
+          }
+        }
+      });
     }
 
     const decision = await prisma.decision.create({
@@ -884,12 +1101,32 @@ app.patch('/api/decisions/:id', csrfProtection, async (req, res) => {
       return res.status(400).json({ error: 'notes is required' });
     }
 
-    const decision = await prisma.decision.update({
+    // Get the decision to check workspace access
+    const decision = await prisma.decision.findUnique({
+      where: { id },
+      include: {
+        strand: {
+          select: { workspaceId: true }
+        }
+      }
+    });
+
+    if (!decision) {
+      return res.status(404).json({ error: 'Decision not found' });
+    }
+
+    // Check if user is a member of the workspace
+    const member = await getMember(user.id, decision.strand.workspaceId);
+    if (!member) {
+      return res.status(403).json({ error: 'Not a member of this workspace' });
+    }
+
+    const updated = await prisma.decision.update({
       where: { id },
       data: { notes }
     });
 
-    res.json({ decision });
+    res.json({ decision: updated });
   } catch (error) {
     console.error('Update decision error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -910,6 +1147,12 @@ app.get('/api/strands/:id/doc', async (req, res) => {
     }
 
     const { id } = req.params;
+
+    // Check if user has access to the strand's workspace
+    const accessCheck = await checkStrandAccess(id, user.id);
+    if (!accessCheck.hasAccess) {
+      return res.status(403).json({ error: accessCheck.error });
+    }
 
     const doc = await prisma.doc.findUnique({
       where: { strandId: id }
@@ -944,6 +1187,12 @@ app.post('/api/docs', csrfProtection, async (req, res) => {
 
     if (!strandId || !sections) {
       return res.status(400).json({ error: 'strandId and sections are required' });
+    }
+
+    // Check if user has access to the strand's workspace
+    const accessCheck = await checkStrandAccess(strandId, user.id);
+    if (!accessCheck.hasAccess) {
+      return res.status(403).json({ error: accessCheck.error });
     }
 
     const doc = await prisma.doc.upsert({
@@ -1197,6 +1446,57 @@ app.get('/api/wiki/search', async (req, res) => {
 });
 
 // Member routes
+app.get('/api/strands/:id/participants', async (req, res) => {
+  try {
+    const sessionId = req.cookies.auth_session;
+    if (!sessionId) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+
+    const { session, user } = await validateSession(sessionId);
+    if (!session || !user) {
+      return res.status(401).json({ error: 'Invalid session' });
+    }
+
+    const { id } = req.params;
+
+    const strand = await prisma.strand.findUnique({
+      where: { id },
+      include: {
+        participants: {
+          include: {
+            user: true
+          }
+        },
+        workspace: true
+      }
+    });
+
+    if (!strand) {
+      return res.status(404).json({ error: 'Strand not found' });
+    }
+
+    // Verify user is a member of the workspace
+    const member = await getMember(user.id, strand.workspaceId);
+    if (!member) {
+      return res.status(403).json({ error: 'Not a member of this workspace' });
+    }
+
+    const participants = strand.participants.map(p => ({
+      id: p.id,
+      userId: p.user.id,
+      name: p.user.name,
+      email: p.user.email,
+      role: p.role
+    }));
+
+    res.json({ participants });
+  } catch (error) {
+    console.error('Get strand participants error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 app.get('/api/members', async (req, res) => {
   try {
     const sessionId = req.cookies.auth_session;
@@ -1825,6 +2125,25 @@ async function getMember(userId, workspaceId) {
       workspace: true
     }
   });
+}
+
+// Helper function to check if user has access to a strand's workspace
+async function checkStrandAccess(strandId, userId) {
+  const strand = await prisma.strand.findUnique({
+    where: { id: strandId },
+    select: { workspaceId: true }
+  });
+  
+  if (!strand) {
+    return { hasAccess: false, error: 'Strand not found' };
+  }
+  
+  const member = await getMember(userId, strand.workspaceId);
+  if (!member) {
+    return { hasAccess: false, error: 'Not a member of this workspace' };
+  }
+  
+  return { hasAccess: true, workspaceId: strand.workspaceId };
 }
 
 // Export clients for testing

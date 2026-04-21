@@ -280,30 +280,35 @@ function switchTab(name, el) {
 
 // ─── MODALS ──────────────────────────────────────────────────────────────
 
-function openModal(type) {
+function openModal(type, strandId = null) {
   const container = document.getElementById('modal-container');
   let content = '';
   let title = '';
 
   if (type === 'members') {
-    title = 'Team members';
+    const isStrandParticipants = strandId !== null;
+    title = isStrandParticipants ? 'Strand participants' : 'Team members';
     content = `
       <div class="modal-header">
-        <span class="modal-title" id="modal-title">Team members</span>
+        <span class="modal-title" id="modal-title">${title}</span>
         <button class="modal-close" onclick="closeModal()" aria-label="Close modal">×</button>
       </div>
       <div class="modal-body" id="members-body">
         <div style="padding:20px;text-align:center;color:var(--text-muted);font-size:11px;">Loading members...</div>
       </div>
+      ${!isStrandParticipants ? `
       <div class="modal-footer">
         <div style="display:flex;gap:10px;align-items:center;flex:1;">
           <input type="email" id="modal-invite-email" placeholder="Invite by email" aria-label="Email to invite" style="flex:1;padding:8px;border:1px solid var(--border);border-radius:4px;">
           <button class="btn-ok" onclick="inviteMember()" aria-label="Send invitation">Invite</button>
         </div>
         <button class="btn-ok" onclick="closeModal()" aria-label="Close modal">done</button>
-      </div>`;
+      </div>` : `
+      <div class="modal-footer">
+        <button class="btn-ok" onclick="closeModal()" aria-label="Close modal">done</button>
+      </div>`}`;
     // Load members after modal is rendered
-    setTimeout(loadMembers, 0);
+    setTimeout(() => loadMembers(strandId), 0);
   }
 
   if (type === 'strand') {
@@ -317,10 +322,6 @@ function openModal(type) {
         <div>
           <div class="field-label">What needs to be worked on?</div>
           <input type="text" class="field-input" id="f-strand-title" placeholder="e.g. Investigate memory leak in worker" aria-label="Strand title" autofocus>
-        </div>
-        <div>
-          <div class="field-label">Context (optional)</div>
-          <textarea class="field-input" id="f-strand-ctx" placeholder="What triggered this? Any relevant background..." rows="3" aria-label="Strand context"></textarea>
         </div>
       </div>
       <div class="modal-footer">
@@ -448,7 +449,6 @@ function overlayClick(e) { if (e.target.classList.contains('modal-overlay')) clo
 
 async function createStrand() {
   const title = document.getElementById('f-strand-title').value.trim();
-  const context = document.getElementById('f-strand-ctx').value.trim();
   if (!title) return;
 
   try {
@@ -461,17 +461,6 @@ async function createStrand() {
       closeModal();
       const data = await response.json();
       const strandId = data.strand.id;
-
-      // If context was provided, add it to the doc
-      if (context) {
-        await fetchWithWorkspace('/api/docs', {
-          method: 'POST',
-          body: JSON.stringify({
-            strandId,
-            sections: [{ label: 'Context', content: context }]
-          })
-        });
-      }
 
       await loadStrands();
       selectStrand(strandId);
@@ -955,7 +944,7 @@ async function selectStrand(strandId) {
       threadChips.innerHTML = `
         <div class="chip"><div class="chip-dot green"></div>${taskCount} tasks</div>
         <div class="chip"><div class="chip-dot accent"></div>${decisionCount} decisions</div>
-        <div class="chip"><div class="chip-dot blue"></div>${memberCount} members</div>
+        <div class="chip" onclick="openModal('members', '${strandId}')" style="cursor:pointer"><div class="chip-dot blue"></div>${memberCount} members</div>
       `;
     }
 
@@ -1115,7 +1104,7 @@ function renderTasks(tasks) {
     const assigneeName = task.assignee?.user?.name || '';
 
     row.innerHTML = `
-      <div class="t-check ${task.done || task.status === 'done' ? 'done' : ''}" onclick="event.stopPropagation();toggleTask('${task.id}', ${!task.done})"></div>
+      <div class="t-check ${task.done || task.status === 'done' ? 'done' : ''}" onclick="event.stopPropagation();toggleTask('${task.id}', ${task.done || task.status === 'done'})"></div>
       <div class="t-info">
         <div class="t-name ${task.done || task.status === 'done' ? 'done' : ''}">${escapeHtml(task.name)}</div>
         <div class="t-meta">
@@ -1471,28 +1460,38 @@ function addInvite() {
 
 // ─── MEMBER MANAGEMENT ─────────────────────────────────────────────────────
 
-async function loadMembers() {
+async function loadMembers(strandId = null) {
   try {
-    const [membersRes, invitationsRes] = await Promise.all([
-      fetchWithWorkspace('/api/members'),
-      fetchWithWorkspace('/api/invitations')
-    ]);
-
-    if (membersRes.ok) {
-      const membersData = await membersRes.json();
-      let invitations = [];
-      if (invitationsRes.ok) {
-        const invitationsData = await invitationsRes.json();
-        invitations = invitationsData.invitations || [];
+    if (strandId) {
+      // Load strand participants
+      const response = await fetchWithWorkspace(`/api/strands/${strandId}/participants`);
+      if (response.ok) {
+        const data = await response.json();
+        renderMembers(data.participants, [], true); // true = strand participants mode
       }
-      renderMembers(membersData.members, invitations);
+    } else {
+      // Load workspace members
+      const [membersRes, invitationsRes] = await Promise.all([
+        fetchWithWorkspace('/api/members'),
+        fetchWithWorkspace('/api/invitations')
+      ]);
+
+      if (membersRes.ok) {
+        const membersData = await membersRes.json();
+        let invitations = [];
+        if (invitationsRes.ok) {
+          const invitationsData = await invitationsRes.json();
+          invitations = invitationsData.invitations || [];
+        }
+        renderMembers(membersData.members, invitations, false);
+      }
     }
   } catch (error) {
     console.error('Load members error:', error);
   }
 }
 
-function renderMembers(members, invitations = []) {
+function renderMembers(members, invitations = [], isStrandParticipants = false) {
   const body = document.getElementById('members-body');
   if (!body) return;
 
@@ -1501,62 +1500,55 @@ function renderMembers(members, invitations = []) {
     return;
   }
 
-  const currentUserId = localStorage.getItem('userId');
-  body.innerHTML = '';
+  let html = '';
 
-  // Render pending invitations
-  if (invitations.length > 0) {
-    const sectionTitle = document.createElement('div');
-    sectionTitle.style.cssText = 'padding:10px 0;font-size:11px;color:var(--text-muted);font-weight:600;text-transform:uppercase;';
-    sectionTitle.textContent = 'Pending Invitations';
-    body.appendChild(sectionTitle);
+  // Render pending invitations first (only for workspace members, not strand participants)
+  if (!isStrandParticipants && invitations.length > 0) {
+    html += `<div class="section-title">Pending invitations</div>`;
 
     invitations.forEach(invitation => {
-      const row = document.createElement('div');
-      row.className = 'member-row';
-      row.style.cssText = 'background:var(--accent-bg);border-left:3px solid var(--accent-color);';
-
-      row.innerHTML = `
-        <div class="member-av" style="background:var(--accent-color)">?</div>
-        <div class="member-info">
-          <div class="member-name">${invitation.email}</div>
-          <div class="member-email" style="font-size:10px;">Pending invitation</div>
-        </div>
-        <div style="display:flex;gap:5px;">
+      const initial = invitation.email.charAt(0).toUpperCase();
+      html += `
+        <div class="member-row">
+          <div class="member-av" style="background:var(--accent-color)">?</div>
+          <div class="member-info">
+            <div class="member-name">${invitation.email}</div>
+            <div class="member-email" style="font-size:10px;">Pending invitation</div>
+          </div>
           <button class="member-remove" onclick="resendInvitation('${invitation.id}')">resend</button>
           <button class="member-remove" onclick="deleteInvitation('${invitation.id}')">delete</button>
         </div>
       `;
-      body.appendChild(row);
     });
   }
 
   // Render members
   if (members.length > 0) {
-    const sectionTitle = document.createElement('div');
-    sectionTitle.style.cssText = 'padding:10px 0;font-size:11px;color:var(--text-muted);font-weight:600;text-transform:uppercase;margin-top:10px;';
-    sectionTitle.textContent = 'Members';
-    body.appendChild(sectionTitle);
+    html += `<div class="section-title">${isStrandParticipants ? 'Participants' : 'Members'}</div>`;
 
     members.forEach(member => {
-      const row = document.createElement('div');
-      row.className = 'member-row';
-      const isYou = member.user.id === currentUserId;
-      const initial = member.user.name.charAt(0).toUpperCase();
-      const avatarClass = isYou ? 'you' : (['r', 'm', 'j'].includes(initial.toLowerCase()) ? initial.toLowerCase() : 'r');
+      const isYou = member.userId === getCurrentUserId() || member.user?.id === getCurrentUserId();
+      const name = member.name || member.user?.name;
+      const email = member.email || member.user?.email;
+      const role = member.role;
+      const initial = name.charAt(0).toUpperCase();
+      const avatarClass = name.charAt(0).toLowerCase();
 
-      row.innerHTML = `
-        <div class="member-av ${avatarClass}">${initial}</div>
-        <div class="member-info">
-          <div class="member-name">${member.user.name}${isYou ? ' (you)' : ''}</div>
-          <div class="member-email">${member.user.email}</div>
+      html += `
+        <div class="member-row">
+          <div class="member-av ${avatarClass}">${initial}</div>
+          <div class="member-info">
+            <div class="member-name">${name}${isYou ? ' (you)' : ''}</div>
+            <div class="member-email">${email}</div>
+          </div>
+          ${!isStrandParticipants ? `<span class="member-role ${role}">${role}</span>` : ''}
+          ${!isStrandParticipants && !isYou ? '<button class="member-remove" onclick="removeMember(\'' + member.id + '\')">remove</button>' : ''}
         </div>
-        <span class="member-role ${member.role}">${member.role}</span>
-        ${!isYou ? '<button class="member-remove" onclick="removeMember(\'' + member.id + '\')">remove</button>' : '<button class="member-remove" disabled style="opacity:0.3;cursor:default">you</button>'}
       `;
-      body.appendChild(row);
     });
   }
+
+  body.innerHTML = html;
 }
 
 async function removeMember(memberId) {

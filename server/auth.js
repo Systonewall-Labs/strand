@@ -11,7 +11,9 @@ const lucia = new Lucia(adapter, {
     attributes: {
       secure: process.env.NODE_ENV === 'production',
       httpOnly: true,
-      sameSite: 'lax'
+      sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
+      maxAge: 60 * 60 * 24 * 7, // 7 days
+      path: '/'
     }
   },
   getUserAttributes: (attributes) => {
