@@ -196,6 +196,31 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('theme-toggle').textContent = '☾';
   }
 
+  // Check for verification errors in URL
+  const urlParams = new URLSearchParams(window.location.search);
+  const error = urlParams.get('error');
+  if (error) {
+    switch (error) {
+      case 'missing_token':
+        showToast('Verification token is missing');
+        break;
+      case 'invalid_token':
+        showToast('Invalid verification link. Please request a new one.');
+        break;
+      case 'expired_token':
+        showToast('Verification link has expired. Please request a new one.');
+        break;
+      case 'already_verified':
+        showToast('Email is already verified. You can log in.');
+        break;
+      case 'server_error':
+        showToast('An error occurred during verification. Please try again.');
+        break;
+    }
+    // Clean URL
+    window.history.replaceState({}, document.title, window.location.pathname);
+  }
+
   // Check session
   try {
     const response = await fetch('/api/auth/me', {
@@ -615,12 +640,9 @@ async function handleSignup() {
       return;
     }
 
-    // If user was added to a workspace via invitation, go directly to app
-    if (data.workspace) {
-      goTo('screen-app');
-    } else {
-      goTo('screen-workspace');
-    }
+    // Show verification message - user must verify email before logging in
+    showToast('Please check your email to verify your account');
+    goTo('screen-login');
   } catch (error) {
     console.error('Signup error:', error);
     showToast('An error occurred during signup');
@@ -654,11 +676,51 @@ async function handleLogin() {
       goTo('screen-app');
     } else {
       const data = await response.json();
-      showToast(data.error || 'Login failed');
+      if (response.status === 403 && data.requiresVerification) {
+        // Navigate to verification screen and pre-fill email
+        document.getElementById('v-email').value = email;
+        document.getElementById('v-password').value = password;
+        goTo('screen-verification');
+      } else {
+        showToast(data.error || 'Login failed');
+      }
     }
   } catch (error) {
     console.error('Login error:', error);
     showToast('An error occurred during login');
+  }
+}
+
+async function handleResendVerification() {
+  const email = document.getElementById('v-email').value.trim();
+  const password = document.getElementById('v-password').value.trim();
+
+  if (!email || !password) {
+    showToast('Please enter email and password');
+    return;
+  }
+
+  try {
+    const response = await fetch('/api/auth/resend-verification', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password })
+    });
+
+    const data = await response.json();
+
+    if (response.ok) {
+      showToast('Verification email sent successfully');
+    } else {
+      if (response.status === 429) {
+        showToast(data.error || 'Please wait before requesting another email');
+      } else {
+        showToast(data.error || 'Failed to resend verification email');
+      }
+    }
+  } catch (error) {
+    console.error('Resend verification error:', error);
+    showToast('An error occurred while resending verification email');
   }
 }
 
@@ -688,9 +750,13 @@ async function handleWorkspaceCreation() {
   }
 
   try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (csrfToken) {
+      headers['X-CSRF-Token'] = csrfToken;
+    }
     const response = await fetch('/api/workspace', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ name, firstStrand })
     });
 
@@ -710,9 +776,13 @@ async function handleWorkspaceCreation() {
 
 async function skipWorkspace() {
   try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (csrfToken) {
+      headers['X-CSRF-Token'] = csrfToken;
+    }
     const response = await fetch('/api/workspace', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({})
     });
 
@@ -739,9 +809,13 @@ async function createNewWorkspace() {
   }
 
   try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (csrfToken) {
+      headers['X-CSRF-Token'] = csrfToken;
+    }
     const response = await fetch('/api/workspace', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ name })
     });
 

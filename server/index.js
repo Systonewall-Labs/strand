@@ -15,7 +15,12 @@ import {
   verifyPassword,
   createSession,
   validateSession,
-  invalidateSession
+  invalidateSession,
+  generateVerificationToken,
+  sendVerificationEmail,
+  isVerificationEmailCooldown,
+  markEmailAsVerified,
+  setVerificationToken
 } from './auth.js';
 import { csrfProtection, setCsrfToken } from './middleware/csrf.js';
 
@@ -178,6 +183,24 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+// Rate limiter for email verification endpoint
+const verificationLimiter = rateLimit({
+  windowMs: rateLimitWindowMs,
+  max: 10, // 10 requests per window for verification
+  message: { error: 'Too many verification attempts, please try again later' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Rate limiter for resend verification endpoint
+const resendVerificationLimiter = rateLimit({
+  windowMs: rateLimitWindowMs,
+  max: 3, // 3 requests per window for resend
+  message: { error: 'Too many resend attempts, please try again later' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
 app.use(generalLimiter);
 app.use(setCsrfToken);
 
@@ -217,17 +240,30 @@ app.post('/api/auth/signup', authLimiter, async (req, res) => {
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
+    // Generate verification token
+    const verificationToken = generateVerificationToken();
+    const verificationTokenExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+
     const user = await prisma.user.create({
       data: {
         name,
         email,
-        password: hashedPassword
+        password: hashedPassword,
+        verificationToken,
+        verificationTokenExpiresAt,
+        lastVerificationEmailSentAt: new Date()
       }
     });
 
-    const session = await createSession(user.id);
-    res.setHeader('Set-Cookie', session.cookie);
+    // Send verification email
+    try {
+      await sendVerificationEmail(email, verificationToken);
+    } catch (emailError) {
+      console.error('Failed to send verification email:', emailError);
+      // Continue even if email fails
+    }
 
+    // Do NOT create session - user must verify email first
     // Check if there's a pending invitation
     const pendingInvitationId = req.cookies.pending_invitation;
     let workspace = null;
@@ -284,7 +320,9 @@ app.post('/api/auth/signup', authLimiter, async (req, res) => {
     }
 
     res.status(201).json({
+      message: 'Registration successful. Please check your email to verify your account.',
       user: { id: user.id, name: user.name, email: user.email },
+      requiresVerification: true,
       workspace: workspace ? { id: workspace.id, name: workspace.name } : null
     });
   } catch (error) {
@@ -311,6 +349,38 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
+    // Check if email is verified
+    if (!user.emailVerified) {
+      // Check if token is expired or doesn't exist
+      const tokenExpired = !user.verificationTokenExpiresAt || new Date(user.verificationTokenExpiresAt) < new Date();
+      const noToken = !user.verificationToken;
+
+      if (tokenExpired || noToken) {
+        // Check cooldown before sending new email
+        const onCooldown = await isVerificationEmailCooldown(user);
+        
+        if (!onCooldown) {
+          // Generate new token and send email
+          const newToken = generateVerificationToken();
+          const newExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+          
+          await setVerificationToken(user.id, newToken, newExpiresAt);
+          
+          try {
+            await sendVerificationEmail(email, newToken);
+          } catch (emailError) {
+            console.error('Failed to send verification email:', emailError);
+          }
+        }
+      }
+
+      return res.status(403).json({
+        error: 'Email not verified',
+        requiresVerification: true,
+        message: 'Please check your email to verify your account before logging in.'
+      });
+    }
+
     const session = await createSession(user.id);
 
     res.setHeader('Set-Cookie', session.cookie);
@@ -335,6 +405,114 @@ app.post('/api/auth/logout', async (req, res) => {
     res.json({ success: true });
   } catch (error) {
     secureLog('ERROR', 'Logout error', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.get('/api/auth/verify-email', verificationLimiter, async (req, res) => {
+  try {
+    const { token } = req.query;
+
+    secureLog('INFO', 'Verification attempt with token:', token ? 'present' : 'missing');
+
+    if (!token) {
+      return res.redirect('/?error=missing_token');
+    }
+
+    // Find user with this token
+    const user = await prisma.user.findUnique({
+      where: { verificationToken: token }
+    });
+
+    if (!user) {
+      secureLog('WARN', 'No user found with verification token');
+      return res.redirect('/?error=invalid_token');
+    }
+
+    secureLog('INFO', 'User found:', user.email, 'Email verified:', user.emailVerified ? 'yes' : 'no');
+
+    // Check if token is expired
+    if (!user.verificationTokenExpiresAt || new Date(user.verificationTokenExpiresAt) < new Date()) {
+      secureLog('WARN', 'Token expired for user:', user.email);
+      return res.redirect('/?error=expired_token');
+    }
+
+    // Check if email is already verified
+    if (user.emailVerified) {
+      secureLog('WARN', 'Email already verified for user:', user.email);
+      return res.redirect('/?error=already_verified');
+    }
+
+    // Mark email as verified
+    await markEmailAsVerified(user.id);
+    secureLog('INFO', 'Email marked as verified for user:', user.email);
+
+    // Create session for user
+    const session = await createSession(user.id);
+    secureLog('INFO', 'Session created for user:', user.id);
+    res.setHeader('Set-Cookie', session.cookie);
+
+    // Redirect to app on success
+    res.redirect('/');
+  } catch (error) {
+    secureLog('ERROR', 'Email verification error', error);
+    res.redirect('/?error=server_error');
+  }
+});
+
+app.post('/api/auth/resend-verification', resendVerificationLimiter, async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required' });
+    }
+
+    // Verify credentials
+    const user = await getUserByEmail(email);
+    if (!user) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    const valid = await verifyPassword(password, user.password);
+    if (!valid) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    // Check if email is already verified
+    if (user.emailVerified) {
+      return res.status(400).json({ error: 'Email is already verified' });
+    }
+
+    // Check cooldown
+    const onCooldown = await isVerificationEmailCooldown(user);
+    if (onCooldown) {
+      return res.status(429).json({
+        error: 'Please wait before requesting another verification email',
+        cooldown: '5 minutes'
+      });
+    }
+
+    // Generate new token
+    const newToken = generateVerificationToken();
+    const newExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+    await setVerificationToken(user.id, newToken, newExpiresAt);
+
+    // Send verification email
+    try {
+      await sendVerificationEmail(email, newToken);
+    } catch (emailError) {
+      console.error('Failed to send verification email:', emailError);
+      return res.status(500).json({ error: 'Failed to send verification email' });
+    }
+
+    res.json({
+      success: true,
+      message: 'Verification email sent successfully'
+    });
+  } catch (error) {
+    secureLog('ERROR', 'Resend verification error', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
@@ -1394,20 +1572,17 @@ app.get('/api/wiki/search', async (req, res) => {
       OR: query ? [
         {
           what: {
-            contains: query,
-            mode: 'insensitive'
+            contains: query
           }
         },
         {
           why: {
-            contains: query,
-            mode: 'insensitive'
+            contains: query
           }
         },
         {
           notes: {
-            contains: query,
-            mode: 'insensitive'
+            contains: query
           }
         }
       ] : undefined

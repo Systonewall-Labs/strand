@@ -35,6 +35,33 @@
   </div>
 </div>
 
+<!-- ══ SCREEN 0.5: EMAIL VERIFICATION ══ -->
+<div class="screen" id="screen-verification" role="main" aria-labelledby="verification-title">
+  <div class="onboard-wrap">
+    <div class="onboard-card">
+      <div class="onboard-header">
+        <span class="onboard-logo">strand</span>
+        <div class="onboard-title" id="verification-title">Verify your email</div>
+        <div class="onboard-sub">We've sent a verification link to your email.</div>
+      </div>
+      <div class="onboard-body">
+        <div>
+          <div class="field-label">Work email</div>
+          <input type="email" class="field-input" id="v-email" placeholder="rafael@company.com" aria-label="Work email" required autocomplete="email">
+        </div>
+        <div>
+          <div class="field-label">Password</div>
+          <input type="password" class="field-input" id="v-password" placeholder="········" aria-label="Password" required autocomplete="current-password">
+        </div>
+      </div>
+      <div class="onboard-footer">
+        <button class="btn-primary" onclick="handleResendVerification()" aria-label="Resend verification email">Resend verification email</button>
+        <button class="btn-secondary" onclick="goTo('screen-login')" aria-label="Back to login">← Back to login</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ══ SCREEN 1: SIGNUP ══ -->
 <div class="screen active" id="screen-signup" role="main" aria-labelledby="signup-title">
   <div class="onboard-wrap">

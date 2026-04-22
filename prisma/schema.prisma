@@ -11,11 +11,15 @@ datasource db {
 }
 
 model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String
-  password  String
-  createdAt DateTime @default(now())
+  id                          String   @id @default(cuid())
+  email                       String   @unique
+  name                        String
+  password                    String
+  emailVerified               DateTime?
+  verificationToken           String?  @unique
+  verificationTokenExpiresAt DateTime?
+  lastVerificationEmailSentAt DateTime?
+  createdAt                   DateTime @default(now())
 
   members     Member[]
   messages    Message[]
