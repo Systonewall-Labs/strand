@@ -1,31 +1,87 @@
+import 'dotenv/config';
 import { PrismaClient } from '@prisma/client';
+import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
 import bcrypt from 'bcryptjs';
-import { Lucia } from 'lucia';
-import { PrismaAdapter } from '@lucia-auth/adapter-prisma';
 import { Resend } from 'resend';
 import crypto from 'crypto';
 
-const prisma = new PrismaClient();
-const adapter = new PrismaAdapter(prisma.session, prisma.user);
-
-const lucia = new Lucia(adapter, {
-  sessionCookie: {
-    attributes: {
-      secure: process.env.NODE_ENV === 'production',
-      httpOnly: true,
-      sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
-      maxAge: 60 * 60 * 24 * 7, // 7 days
-      path: '/'
-    }
-  },
-  getUserAttributes: (attributes) => {
-    return {
-      id: attributes.id,
-      email: attributes.email,
-      name: attributes.name
-    };
+// Environment validation
+if (process.env.NODE_ENV === 'production') {
+  if (!process.env.DATABASE_URL) {
+    throw new Error('DATABASE_URL is required in production');
   }
+  if (!process.env.SESSION_SECRET) {
+    throw new Error('SESSION_SECRET is required in production');
+  }
+  if (process.env.SESSION_SECRET.length < 32) {
+    throw new Error('SESSION_SECRET must be at least 32 characters');
+  }
+}
+
+const dbAdapter = new PrismaBetterSqlite3({
+  url: process.env.DATABASE_URL || 'file:./dev.db'
 });
+const prisma = new PrismaClient({ adapter: dbAdapter });
+
+const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
+
+// Session configuration
+const SESSION_EXPIRY_DAYS = 7;
+const SESSION_EXPIRY_MS = SESSION_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
+
+// Generate secure random session ID
+function generateSessionId() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+// Sign session ID with secret
+function signSessionId(sessionId) {
+  const signature = crypto
+    .createHmac('sha256', SESSION_SECRET)
+    .update(sessionId)
+    .digest('base64')
+    .replace(/=+$/, '')
+    .replace(/\//g, '_')
+    .replace(/\+/g, '_');
+  return `${sessionId}.${signature}`;
+}
+
+// Verify and unsign session ID
+function unsignSessionId(signedSessionId) {
+  const parts = signedSessionId.split('.');
+  if (parts.length !== 2) {
+    return null;
+  }
+  const [sessionId, signature] = parts;
+  const expectedSignature = crypto
+    .createHmac('sha256', SESSION_SECRET)
+    .update(sessionId)
+    .digest('base64')
+    .replace(/=+$/, '')
+    .replace(/\//g, '_')
+    .replace(/\+/g, '_');
+  
+  if (signature === expectedSignature) {
+    return sessionId;
+  }
+  return null;
+}
+
+// Create session cookie string
+function createSessionCookie(sessionId) {
+  const signedSessionId = signSessionId(sessionId);
+  const isProduction = process.env.NODE_ENV === 'production';
+  const cookieParts = [
+    `auth_session=${signedSessionId}`,
+    'HttpOnly',
+    'Path=/',
+    isProduction ? 'Secure' : '',
+    isProduction ? 'SameSite=Strict' : 'SameSite=Lax',
+    `Max-Age=${SESSION_EXPIRY_DAYS * 24 * 60 * 60}`
+  ].filter(Boolean);
+  
+  return cookieParts.join('; ');
+}
 
 async function hashPassword(password) {
   return await bcrypt.hash(password, 10);
@@ -53,18 +109,98 @@ async function getUserByEmail(email) {
 }
 
 async function createSession(userId) {
-  const session = await lucia.createSession(userId, {});
-  const sessionCookie = lucia.createSessionCookie(session.id);
-  return { session, cookie: sessionCookie.serialize() };
+  const sessionId = generateSessionId();
+  const expiresAt = new Date(Date.now() + SESSION_EXPIRY_MS);
+  
+  const session = await prisma.session.create({
+    data: {
+      id: sessionId,
+      userId,
+      expiresAt
+    }
+  });
+  
+  const cookie = createSessionCookie(sessionId);
+  return { session, cookie };
 }
 
-async function validateSession(sessionId) {
-  const { session, user } = await lucia.validateSession(sessionId);
-  return { session, user };
+// Rotate session ID (regenerate with same user) to prevent session fixation
+async function rotateSession(oldSessionId) {
+  const oldSession = await prisma.session.findUnique({
+    where: { id: oldSessionId },
+    include: { user: true }
+  });
+  
+  if (!oldSession) {
+    return null;
+  }
+  
+  // Delete old session
+  await prisma.session.delete({ where: { id: oldSessionId } });
+  
+  // Create new session with new ID
+  const newSessionId = generateSessionId();
+  const expiresAt = new Date(Date.now() + SESSION_EXPIRY_MS);
+  
+  const newSession = await prisma.session.create({
+    data: {
+      id: newSessionId,
+      userId: oldSession.userId,
+      expiresAt
+    }
+  });
+  
+  const cookie = createSessionCookie(newSessionId);
+  return { session: newSession, cookie };
 }
 
-async function invalidateSession(sessionId) {
-  await lucia.invalidateSession(sessionId);
+async function validateSession(signedSessionId) {
+  if (!signedSessionId) {
+    return { session: null, user: null };
+  }
+  
+  // Verify signature
+  const sessionId = unsignSessionId(signedSessionId);
+  if (!sessionId) {
+    return { session: null, user: null };
+  }
+  
+  const session = await prisma.session.findUnique({
+    where: { id: sessionId },
+    include: { user: true }
+  });
+  
+  if (!session) {
+    return { session: null, user: null };
+  }
+  
+  // Check if session is expired
+  if (session.expiresAt < new Date()) {
+    await prisma.session.delete({ where: { id: sessionId } });
+    return { session: null, user: null };
+  }
+  
+  // Extend session if halfway to expiry
+  const timeUntilExpiry = session.expiresAt.getTime() - Date.now();
+  if (timeUntilExpiry < SESSION_EXPIRY_MS / 2) {
+    const newExpiresAt = new Date(Date.now() + SESSION_EXPIRY_MS);
+    await prisma.session.update({
+      where: { id: sessionId },
+      data: { expiresAt: newExpiresAt }
+    });
+    session.expiresAt = newExpiresAt;
+  }
+  
+  return { session, user: session.user };
+}
+
+async function invalidateSession(signedSessionId) {
+  if (signedSessionId) {
+    const sessionId = unsignSessionId(signedSessionId);
+    if (sessionId) {
+      await prisma.session.delete({ where: { id: sessionId } });
+    }
+  }
 }
 
 // Email verification helper functions
@@ -167,11 +303,11 @@ async function setVerificationToken(userId, token, expiresAt) {
 }
 
 export {
-  lucia,
   createUser,
   getUserByEmail,
   verifyPassword,
   createSession,
+  rotateSession,
   validateSession,
   invalidateSession,
   generateVerificationToken,
